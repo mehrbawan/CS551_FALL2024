@@ -1,0 +1,394 @@
+
+
+/*************************************************
+ * Draw multiple points bouncing in a circle (in parallel)
+ * Modified Feb 24, 2024; by Jim X. Chen
+ * 
+ * a) Another method of sending values to the vertex shader(s) respectively: per-vertex values 
+ * b) Efficient transfer of default per-vertex values: position, color, normal, texture coordinates, etc.
+ * c) Mixing per-vertex color and uniform color, a selection in the vertex shader
+ * d) Calculate pixels on the circle one unit apart, point in the circle vector reflection, etc.
+ * e) Add a background sound/music (optional entertainment) 
+ * 
+ * VBO: arrays to store vertex positions, colors, and other per-vertex information
+ * VAO: an array that packs multiple VBO for transferring to the vertex shader
+ *
+ */
+
+
+//import jim.jogl.samples.JOGL1_3_VertexArray;
+
+
+
+import java.nio.FloatBuffer;
+
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.Clip;
+import javax.sound.sampled.FloatControl;
+
+import com.jogamp.common.nio.Buffers;
+
+import com.jogamp.opengl.*;
+
+import static com.jogamp.opengl.GL4.*;
+
+
+
+public class HW5_BounceInCircle extends JOGL1_3_VertexArray {
+
+	float r = HEIGHT / 2.3f; // physical coordinates: radius in number of pixels
+	float R = 2 * r / HEIGHT; // logical coordinates: corresponding radius
+	float theta = 0, dtheta = 1/r; // delta angle for one pixel apart (size 2 for points on circle)
+
+	int noPoints = (int) (2*Math.PI/dtheta); // # of points on the circle
+	float pointsOn[] = new float[noPoints * 3]; // each point has x, y, z values
+	float color[] = { 1.0f, 1.0f, 0.0f };	
+
+	int pnum = 100; // number of points in the circle
+	float pointsIn[] = new float[pnum * 3]; // points
+	float direction[] = new float[pnum * 3]; // direction vectors
+	float clr[] = new float[pnum * 3]; // colors of the points
+
+	Clip clip1, clip2; // sounce clip
+	
+	float triPoints[] = new float[3 * 3]; // each point has x, y, z values
+
+
+	
+	public HW5_BounceInCircle() { // it runs always for inheritance, so it is better to inialize in init() 		
+	}
+	
+	
+	// called for handling drawing area when it is reshaped
+	public void reshape(GLAutoDrawable drawable, int x, int y, int width, int height) {
+		WIDTH = width; HEIGHT = height; 
+		System.out.println("b) need viewport for the drawing area.");
+		System.out.println("It should be in reshape() instead of init(); it is meaningful after reshape() is called.");
+		System.out.println("It should be in reshape() instead of display(); it needs to be called just once.");
+
+		gl.glViewport((WIDTH-HEIGHT)/2, 0, HEIGHT, HEIGHT); // for an initial square drawing area
+
+		// add a background music/sound
+		clip1 = sound("ImperialMarch60.wav"); 
+		clip2 = sound("ding.wav"); 
+		
+		// Too loud clip1 compared to clip2: Reduce volume by 10 decibels
+		FloatControl gainControl = 
+			    (FloatControl) clip1.getControl(FloatControl.Type.MASTER_GAIN);
+		gainControl.setValue(-10.0f); // Reduce volume by 10 decibels.
+
+	}
+	
+
+	// add a background sound: soundFile in wav format
+	public Clip sound(String soundFile) {
+		Clip myclip = null; 
+		
+	    try {
+	        AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(this.getClass().getResource(soundFile));
+	        myclip = AudioSystem.getClip();
+	        myclip.open(audioInputStream);
+	        // myclip.start(); // you can start this sound thread at a specific location in the code
+	        // If you want the sound to loop infinitely, then put: myclip.loop(Clip.LOOP_CONTINUOUSLY); 
+	        // If you want to stop the sound, then use myclip.stop();
+	    } catch (Exception ex) {
+	        ex.printStackTrace();
+	    }
+	    
+	    return myclip; 
+	}
+
+
+
+
+	
+	public void display(GLAutoDrawable drawable) {
+
+		// clear the display every frame
+		float bgColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		FloatBuffer bgColorBuffer = Buffers.newDirectFloatBuffer(bgColor);
+
+		gl.glClearBufferfv(GL_COLOR, 0, bgColorBuffer); // clear every frame
+
+	
+		// draw a circle: the points can be loaded in VAO[0] in init(), because they don't change
+		drawCircle();
+		
+		// draw points bounce in the circle: the points can be loaded every frame in VAO[1]
+		drawPoints();		
+		
+		drawProjectTriangle();
+		// add background sound
+		cnt++;
+		if (cnt==200) clip1.start();
+		//if (cnt>2000) clip1.stop();
+
+	}
+
+	public void drawCircle() {
+
+		// send an uniform color to the vertex shader
+		color[0] = 0; 
+		color[1] = 1; 
+		color[2] = 1; 
+		uploadColor(color) ; 
+		
+		// send the circle points to the vertex shader
+		// 3. load vbo[0] with vertex data
+		gl.glBindBuffer(GL_ARRAY_BUFFER, vbo[0]); // use handle 0
+		FloatBuffer vBuf = Buffers.newDirectFloatBuffer(pointsOn); // vertices packed to upload to V shader
+		gl.glBufferData(GL_ARRAY_BUFFER, vBuf.limit() * Float.BYTES, // # of float * size of floats in bytes
+				vBuf, // the vertex positions
+				GL_STATIC_DRAW); // the data is static: modified once and used many times for GL drawing commands
+		gl.glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0); // associate vbo[0] with active vao buffer
+		// layout (location = 0) in V shader; 3 values for each vertex position
+	
+		// Using one VBO only
+		//gl.glEnableVertexAttribArray(0); // Enable the 0th attribute: vertices 
+		gl.glDisableVertexAttribArray(1); // disable the 1th attribute: not using per-vertex color
+		
+		// draw the circle 
+		gl.glPointSize(2.0f); // set the points size a little bigger
+		gl.glDrawArrays(GL_POINTS, 0, noPoints); // 3: size of the array (attributes)
+
+	}
+	
+	public void drawProjectTriangle() {
+
+		// send an uniform color to the vertex shader
+		
+		color[0] = 1; 
+		color[1] = 0; 
+		color[2] = 1; 
+		uploadColor(color) ; 
+		
+		// send the circle points to the vertex shader
+		// 3. load vbo[0] with vertex data
+		gl.glBindBuffer(GL_ARRAY_BUFFER, vbo[0]); // use handle 0
+		FloatBuffer vBuf = Buffers.newDirectFloatBuffer(triPoints); // vertices packed to upload to V shader
+		gl.glBufferData(GL_ARRAY_BUFFER, vBuf.limit() * Float.BYTES, // # of float * size of floats in bytes
+				vBuf, // the vertex positions
+				GL_STATIC_DRAW); // the data is static: modified once and used many times for GL drawing commands
+		gl.glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0); // associate vbo[0] with active vao buffer
+		// layout (location = 0) in V shader; 3 values for each vertex position
+	
+		// Using one VBO only
+		//gl.glEnableVertexAttribArray(0); // Enable the 0th attribute: vertices 
+		gl.glDisableVertexAttribArray(1); // disable the 1th attribute: not using per-vertex color
+		
+		// draw the circle 
+		gl.glPointSize(5.0f); // set the points size a little bigger
+		gl.glDrawArrays(GL_POINTS, 0, 3); // 3: size of the array (attributes)
+
+	}
+
+	public void drawPoints() {
+
+		// send the negative uniform value as an indicator to use per-vertex color
+		// send the list of vertices to the vertex shader
+		// send the list of colors to the vertex shader
+		// draw the vertices in parallel
+		// update the vertices: moving and bouncing 
+			
+		color[0] = -1f; // using negative value to indicate per-vertex color
+		uploadColor(color); 
+		
+		// 3. load vbo[0] with vertex data
+		gl.glBindBuffer(GL_ARRAY_BUFFER, vbo[0]); // use handle 0
+		FloatBuffer vBuf = Buffers.newDirectFloatBuffer(pointsIn); // vertices packed to upload to V shader
+		gl.glBufferData(GL_ARRAY_BUFFER, vBuf.limit() * Float.BYTES, // # of float * size of floats in bytes
+				vBuf, // the vertex positions
+				GL_STATIC_DRAW); // the data is static: modified once and used many times for GL drawing commands
+		gl.glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0); // associate vbo[0] with active vao buffer
+		// layout (location = 0) in V shader; 3 values for each vertex position
+
+		// 4. load vbo[1] with color data
+		gl.glBindBuffer(GL_ARRAY_BUFFER, vbo[1]); // use handle 1
+		vBuf = Buffers.newDirectFloatBuffer(clr);
+		gl.glBufferData(GL_ARRAY_BUFFER, vBuf.limit() * Float.BYTES, // # of float * size of floats in bytes
+				vBuf, // the vertex colors
+				GL_STATIC_DRAW);
+		gl.glVertexAttribPointer(1, 3, GL_FLOAT, false, 0, 0); // associate vbo[1] with active vao buffer
+		// layout (location = 1) in V shader; 3 values for each vertex color
+
+		// 5. enable VAO with loaded VBO data: accessible in the vertex shader
+		//gl.glEnableVertexAttribArray(0); // per-vertex points
+		gl.glEnableVertexAttribArray(1); // per-vertex color
+	
+		gl.glPointSize(5.0f); // points in the circle bigger
+		gl.glDrawArrays(GL_POINTS, 0, pnum); // 3: size of the array (attributes)
+
+	
+		// update the vertices so they bounce in the circle
+		for (int i = 0; i < pnum * 3; i += 3) {
+
+			// points move one step
+			pointsIn[i] += direction[i];
+			pointsIn[i + 1] += direction[i + 1];
+	
+			// bounce when point on or outside the circle
+			if (distance(0, 0, pointsIn[i], pointsIn[i + 1]) > R) {
+
+				clip2.stop(); 
+				clip2.setMicrosecondPosition(0); // from beginning
+				clip2.start();
+				
+				// bring the point back into the circle
+				pointsIn[i] -= direction[i];
+				pointsIn[i + 1] -= direction[i + 1];
+
+				float dir[] = new float[3]; // for calculating bouncing direction
+				float normal[] = new float[3]; // for radius direction: normal
+	
+				dir[0] = -direction[i];
+				dir[1] = -direction[i + 1];
+				dir[2] = 0;
+	
+				normal[0] = -pointsIn[i];
+				normal[1] = -pointsIn[i + 1];
+				normal[2] = 0;
+	
+				// change the direction of the point around r
+				float dir1[] = new float[3]; // for calculating bouncing direction dir1
+				reflect(dir, normal, dir1);
+				
+				direction[i] = dir1[0];
+				direction[i + 1] = dir1[1];
+			}			
+		}	
+	}
+	
+	
+	void uploadColor(float[] color) { // called "uColor" in the shader
+		// send color data to vertex shader through uniform (array): color here is not
+		// per-vertex
+		FloatBuffer cBuf = Buffers.newDirectFloatBuffer(color);
+
+		// Connect JOGL variable with shader variable by name
+		int colorLoc = gl.glGetUniformLocation(vfPrograms, "uColor");
+		gl.glProgramUniform3fv(vfPrograms, colorLoc, 1, cBuf);
+
+	}
+
+	
+	// distance between two points
+	double distance(double x0, double y0, double x1, double y1) {
+
+		return (Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)));
+	}
+
+
+	// reflect v1 around n to v2
+	public void reflect(float v1[], float n[], float v2[]) {
+		normalize(n);
+
+		// v2 = 2*dot(v1, n)*n + v1
+		for (int i = 0; i < 3; i++) {
+			v2[i] = 2 * dotprod(v1, n) * n[i] - v1[i];
+		}
+	}
+
+	// dot product of two vectors
+	public float dotprod(float[] a, float[] b) {
+
+		return (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+	}
+
+	// normalize a vector to unit vector
+	public void normalize(float vector[]) {
+		float d = (float) Math.sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+
+		if (d == 0) {
+			System.err.println("0 length vector: normalize().");
+			return;
+		}
+		vector[0] /= d;
+		vector[1] /= d;
+		vector[2] /= d;
+	}
+
+
+	public void init(GLAutoDrawable drawable) {
+
+		String vShaderSource[], fShaderSource[];
+		gl = (GL4) drawable.getGL();
+
+		System.out.println("\na) init: ");
+
+		String path = this.getClass().getPackageName().replace(".", "/"); 
+		System.out.println("	include package directory: " + path); 
+
+		vShaderSource = readShaderSource("src/"+path+"/HW5_V.shader"); // read vertex shader
+		fShaderSource = readShaderSource("src/"+path+"/HW5_F.shader"); // read fragment shader
+		vfPrograms = initShaders(vShaderSource, fShaderSource);
+				
+		// 1. generate vertex arrays indexed by vao
+		gl.glGenVertexArrays(vao.length, vao, 0); // vao stores the handles, starting position 0
+		System.out.println("	Generate VAO to hold arrays of vertex attributes."); // we use one for the circle: vao[0]
+		gl.glBindVertexArray(vao[0]); // use handle 0: circle 
+
+		// 2. generate vertex buffers indexed by vbo: here to store vertices and colors
+		gl.glGenBuffers(vbo.length, vbo, 0);
+		System.out.println("	Generate VBO (" + vbo.length + ") to hold vertex  attributes."); // we use one: position
+		
+		// 5. enable VAO with loaded VBO data: accessible in the vertex shader
+		gl.glEnableVertexAttribArray(0); // per-vertex points
+		//gl.glEnableVertexAttribArray(1); // per-vertex color
+
+		
+		// building a list of vertices on the circle (once)
+		for (int i = 0; i < 3*noPoints; i++) { // all points on the circle are generated in the array: pointsOn[]
+			theta = theta + dtheta;
+			pointsOn[i] = (float) (R * Math.cos(theta));
+			i++;
+			pointsOn[i] = (float) (R * Math.sin(theta));
+			i++;
+			pointsOn[i] = 0;
+		}
+		
+		// points in the circle:
+		// building a list of vertices, moving vectors (directions), and colors (randomly generated,
+		// once)
+		for (int i = 0; i < 3*pnum; i = i + 3) {
+			// generate a point inside the circle with random positions
+			pointsIn[i + 0] = (float) (R * (Math.random() - 0.5));
+			pointsIn[i + 1] = (float) (R * (Math.random() - 0.5));
+			pointsIn[i + 2] = 0;
+
+			// randomly generated directions: the "velocities" are randomly generated
+			direction[i + 0] = (float) (Math.random() - 0.5)/100f;
+			direction[i + 1] = (float) (Math.random() - 0.5)/100f;
+			direction[i + 2] = 0;
+			// normalize(direction[i]); // make it a unit vector (speed) 
+
+			// randomly generated colors
+			clr[i + 0] = (float) Math.random();
+			clr[i + 1] = (float) Math.random();
+			clr[i + 2] = (float) Math.random();
+
+		} 		
+		
+		//setting three triangle points
+		for (int i = 0; i < 3*3; i++) { // all points on the circle are generated in the array: pointsOn[]
+			int angle = i*120;
+			triPoints[i] = (float) (R * Math.cos(angle));
+			System.out.println(triPoints[i]);
+			i++;
+			triPoints[i] = (float) (R * Math.sin(angle));
+			System.out.println(triPoints[i]);
+			i++;
+			triPoints[i] = 0;
+			System.out.println(triPoints[i]);
+		}
+		
+
+	}
+
+	
+	public static void main(String[] args) {
+		 HW5_BounceInCircle f = new HW5_BounceInCircle();
+		 f.setTitle("HW5 -- bouncing inside a circle"); 
+
+	}
+}
